@@ -1,0 +1,27 @@
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+python-dotenv==1.0.1
+
+# LLM Providers
+groq==0.12.0
+google-generativeai==0.8.3
+
+# Database
+motor==3.6.0
+pymongo==4.9.2
+
+# Task Queue (wired in Week 3 — installed now for import stubs)
+celery[redis]==5.4.0
+upstash-redis==1.3.0
+
+# Image processing (Week 2)
+pillow==11.0.0
+httpx==0.28.0
+
+# Cloud storage (Week 2)
+boto3==1.35.76
+
+# Testing
+pytest==8.3.4
+pytest-asyncio==0.24.0
+pytest-mock==3.14.0
