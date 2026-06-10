@@ -73,6 +73,7 @@ async def get_job_status(job_id: str) -> StatusResponse:
         job_id=job_id,
         status=doc["status"],
         progress_log=progress_log,
+        refined_prompt=doc.get("refined_prompt"),
         variants=variants,
         image_url=doc.get("image_url"),
         telemetry=telemetry,

@@ -51,8 +51,9 @@ class StatusResponse(BaseModel):
     job_id: str
     status: JobStatus
     progress_log: List[StatusLogEntry] = []
+    refined_prompt: Optional[str] = None      # populated after Prompt Refinement Agent runs
     variants: Optional[List[CopyVariant]] = None
-    image_url: Optional[str] = None        # populated in Week 2
+    image_url: Optional[str] = None           # populated after Cloudinary upload
     telemetry: Optional[Telemetry] = None
     error: Optional[str] = None
 

@@ -6,9 +6,10 @@ All operations target the 'jobs' collection in the configured DB.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
+import certifi
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 from app.config import settings
@@ -30,7 +31,11 @@ _db: Optional[AsyncIOMotorDatabase] = None
 def init_db() -> None:
     """Call once at app startup to establish the Motor connection."""
     global _client, _db
-    _client = AsyncIOMotorClient(settings.mongodb_uri)
+    _client = AsyncIOMotorClient(
+        settings.mongodb_uri,
+        tlsCAFile=certifi.where(),      # Fixes SSL handshake on Windows/Python 3.12
+        serverSelectionTimeoutMS=30000,
+    )
     _db = _client[settings.mongodb_db_name]
     logger.info({"event": "mongodb_connected", "db": settings.mongodb_db_name})
 
@@ -53,7 +58,7 @@ def _get_collection():
 
 async def create_job(job_id: str, request_data: dict) -> None:
     """Insert a new PENDING job document."""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     doc = {
         "job_id": job_id,
         "status": JobStatus.pending.value,
@@ -82,7 +87,7 @@ async def update_job_status(
     message: str,
 ) -> None:
     """Append a status log entry and update the top-level status field."""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     await _get_collection().update_one(
         {"job_id": job_id},
         {
@@ -99,6 +104,15 @@ async def update_job_status(
     logger.info({"event": "job_status_updated", "job_id": job_id, "status": status.value})
 
 
+async def update_refined_prompt(job_id: str, refined_prompt: str) -> None:
+    """Persist the Prompt Refinement Agent output to the job document."""
+    await _get_collection().update_one(
+        {"job_id": job_id},
+        {"$set": {"refined_prompt": refined_prompt}},
+    )
+    logger.info({"event": "refined_prompt_saved", "job_id": job_id, "length": len(refined_prompt)})
+
+
 async def update_job_result(
     job_id: str,
     variants: list[CopyVariant],
@@ -106,7 +120,7 @@ async def update_job_result(
     image_url: Optional[str] = None,
 ) -> None:
     """Write the final result payload to the job document."""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     await _get_collection().update_one(
         {"job_id": job_id},
         {
@@ -131,7 +145,7 @@ async def update_job_result(
 
 async def mark_job_failed(job_id: str, error: str) -> None:
     """Mark a job as FAILED with an error message."""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     await _get_collection().update_one(
         {"job_id": job_id},
         {

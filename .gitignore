@@ -37,3 +37,7 @@ logs/
 
 # Generated assets
 outputs/
+
+
+graphify-out/
+.agents/

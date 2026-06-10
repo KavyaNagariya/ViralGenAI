@@ -35,13 +35,7 @@ async def test_generate_returns_202_with_job_id():
     """POST /generate must return HTTP 202 and a job_id immediately."""
     with (
         patch("app.routers.generate.job_store.create_job", new_callable=AsyncMock),
-        patch("app.routers.generate.job_store.update_job_status", new_callable=AsyncMock),
-        patch("app.routers.generate.job_store.update_job_result", new_callable=AsyncMock),
-        patch(
-            "app.routers.generate.copy_generator.generate_copy",
-            new_callable=AsyncMock,
-            return_value=([FAKE_VARIANT], FAKE_TELEMETRY),
-        ),
+        patch("app.routers.generate.run_generation_pipeline_task.delay") as mock_delay,
     ):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.post(
@@ -59,6 +53,7 @@ async def test_generate_returns_202_with_job_id():
     assert "job_id" in body
     assert body["status"] == "PENDING"
     assert "message" in body
+    mock_delay.assert_called_once()
 
 
 @pytest.mark.asyncio

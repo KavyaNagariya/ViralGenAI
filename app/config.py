@@ -10,6 +10,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Route Hugging Face Inference requests to the new endpoint to avoid deprecated domain issues
+import os
+if not os.environ.get("HF_INFERENCE_ENDPOINT"):
+    os.environ["HF_INFERENCE_ENDPOINT"] = "https://router.huggingface.co/hf-inference"
+
+
 
 class Settings:
     # ── LLM ─────────────────────────────────
@@ -26,17 +32,16 @@ class Settings:
     # ── Hugging Face (Week 2) ────────────────
     huggingface_api_token: str = os.getenv("HUGGINGFACE_API_TOKEN", "")
 
-    # ── Cloudflare R2 (Week 2) ───────────────
-    r2_account_id: str = os.getenv("R2_ACCOUNT_ID", "")
-    r2_access_key_id: str = os.getenv("R2_ACCESS_KEY_ID", "")
-    r2_secret_access_key: str = os.getenv("R2_SECRET_ACCESS_KEY", "")
-    r2_bucket_name: str = os.getenv("R2_BUCKET_NAME", "viralgenai-assets")
-    r2_public_url: str = os.getenv("R2_PUBLIC_URL", "")
+    # ── Cloudinary (Week 2) ─────────────────────
+    cloudinary_cloud_name: str = os.getenv("CLOUDINARY_CLOUD_NAME", "")
+    cloudinary_api_key: str = os.getenv("CLOUDINARY_API_KEY", "")
+    cloudinary_api_secret: str = os.getenv("CLOUDINARY_API_SECRET", "")
+    cloudinary_folder: str = os.getenv("CLOUDINARY_FOLDER", "viralgenai")
 
     # ── Redis / Celery (Week 3) ──────────────
     upstash_redis_url: str = os.getenv("UPSTASH_REDIS_URL", "")
     upstash_redis_token: str = os.getenv("UPSTASH_REDIS_TOKEN", "")
-    celery_broker_url: str = os.getenv("CELERY_BROKER_URL", "")
+    celery_broker_url: str = os.getenv("CELERY_BROKER_URL", os.getenv("REDIS_URL", ""))
 
     # ── MongoDB ──────────────────────────────
     mongodb_uri: str = os.getenv("MONGODB_URI", "")
