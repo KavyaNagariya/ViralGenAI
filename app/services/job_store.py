@@ -169,3 +169,9 @@ async def get_job(job_id: str) -> Optional[dict]:
     """Retrieve a job document by job_id. Returns None if not found."""
     doc = await _get_collection().find_one({"job_id": job_id}, {"_id": 0})
     return doc
+
+
+async def get_recent_jobs(limit: int = 20) -> list[dict]:
+    """Retrieve the latest jobs sorted by created_at descending."""
+    cursor = _get_collection().find({}, {"_id": 0}).sort("created_at", -1).limit(limit)
+    return await cursor.to_list(length=limit)

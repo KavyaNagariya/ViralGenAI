@@ -16,23 +16,8 @@ router = APIRouter(prefix="/api/v1", tags=["status"])
 logger = get_logger(__name__)
 
 
-@router.get(
-    "/status/{job_id}",
-    response_model=StatusResponse,
-    summary="Poll the status of a generation job",
-    description=(
-        "Returns job state (PENDING, PROCESSING, SUCCESS, FAILED), "
-        "progress log entries, copy variants (on SUCCESS), and telemetry."
-    ),
-)
-async def get_job_status(job_id: str) -> StatusResponse:
-    doc = await job_store.get_job(job_id)
 
-    if doc is None:
-        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
-
-    logger.info({"event": "status_polled", "job_id": job_id, "status": doc["status"]})
-
+def _map_doc_to_response(doc: dict) -> StatusResponse:
     # ── Deserialize status_history ──────────────────────────
     progress_log = [
         StatusLogEntry(
@@ -70,7 +55,7 @@ async def get_job_status(job_id: str) -> StatusResponse:
         )
 
     return StatusResponse(
-        job_id=job_id,
+        job_id=doc["job_id"],
         status=doc["status"],
         progress_log=progress_log,
         refined_prompt=doc.get("refined_prompt"),
@@ -81,3 +66,33 @@ async def get_job_status(job_id: str) -> StatusResponse:
             doc.get("status_history", [{}])[-1].get("message", "Unknown error")
         ),
     )
+
+
+@router.get(
+    "/status/{job_id}",
+    response_model=StatusResponse,
+    summary="Poll the status of a generation job",
+    description=(
+        "Returns job state (PENDING, PROCESSING, SUCCESS, FAILED), "
+        "progress log entries, copy variants (on SUCCESS), and telemetry."
+    ),
+)
+async def get_job_status(job_id: str) -> StatusResponse:
+    doc = await job_store.get_job(job_id)
+
+    if doc is None:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+
+    logger.info({"event": "status_polled", "job_id": job_id, "status": doc["status"]})
+    return _map_doc_to_response(doc)
+
+
+@router.get(
+    "/history",
+    response_model=list[StatusResponse],
+    summary="Get recent generation jobs",
+    description="Returns the latest generation jobs sorted by created_at descending.",
+)
+async def get_history(limit: int = 20) -> list[StatusResponse]:
+    docs = await job_store.get_recent_jobs(limit)
+    return [_map_doc_to_response(doc) for doc in docs]
