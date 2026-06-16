@@ -13,6 +13,7 @@ from app.services.llm_client import generate_text
 from app.prompts.refinement_prompt import (
     REFINEMENT_SYSTEM_PROMPT,
     build_refinement_user_prompt,
+    build_re_refinement_user_prompt,
 )
 from app.logger import get_logger
 
@@ -41,19 +42,23 @@ def _strip_preamble(text: str) -> str:
     return cleaned.lstrip(":-\n ").strip()
 
 
-async def refine_prompt(brief: str, platform: str) -> str:
+async def refine_prompt(brief: str, platform: str, previous_refined: Optional[str] = None) -> str:
     """
     Run the Prompt Refinement Agent for a given brief and target platform.
 
     Args:
         brief: Raw user brief (e.g. "white sneakers for runners")
         platform: Target platform key (e.g. "instagram")
+        previous_refined: The previously refined visual prompt if this is a refinement turn
 
     Returns:
         A clean, rich visual prompt string ready for FLUX.1-schnell.
     """
     system_prompt = REFINEMENT_SYSTEM_PROMPT
-    user_prompt = build_refinement_user_prompt(brief, platform)
+    if previous_refined:
+        user_prompt = build_re_refinement_user_prompt(brief, platform, previous_refined)
+    else:
+        user_prompt = build_refinement_user_prompt(brief, platform)
 
     logger.info({
         "event": "prompt_refinement_start",

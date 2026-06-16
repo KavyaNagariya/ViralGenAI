@@ -98,10 +98,11 @@ async def generate_text(
         })
         return LLMResponse(text=text, provider="groq", model=settings.groq_primary_model)
 
-    except GroqRateLimitError:
+    except (GroqRateLimitError, GroqAPIError) as e:
         logger.warning({
-            "event": "groq_rate_limit",
+            "event": "groq_primary_failed",
             "model": settings.groq_primary_model,
+            "error": str(e),
             "action": "retry_with_fallback_groq_model",
         })
 
@@ -115,19 +116,12 @@ async def generate_text(
             })
             return LLMResponse(text=text, provider="groq", model=settings.groq_fallback_model)
 
-        except (GroqRateLimitError, GroqAPIError) as e:
+        except (GroqRateLimitError, GroqAPIError) as e2:
             logger.warning({
                 "event": "groq_fallback_failed",
-                "error": str(e),
+                "error": str(e2),
                 "action": "switching_to_gemini",
             })
-
-    except GroqAPIError as e:
-        logger.warning({
-            "event": "groq_api_error",
-            "error": str(e),
-            "action": "switching_to_gemini",
-        })
 
     # ── Step 3: Gemini fallback ─────────────────────────────
     try:

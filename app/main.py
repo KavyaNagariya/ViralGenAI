@@ -21,9 +21,46 @@ logger = get_logger(__name__)
 # ── Lifespan: runs on startup and shutdown ─────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import sys
+    import subprocess
+    
     logger.info({"event": "startup", "env": settings.app_env})
     init_db()
+    
+    # Auto-spawn Celery worker in development/local environment
+    celery_process = None
+    try:
+        celery_cmd = [
+            sys.executable,
+            "-m",
+            "celery",
+            "-A",
+            "app.celery_app",
+            "worker",
+            "--loglevel=info",
+            "-P",
+            "solo",
+        ]
+        logger.info({"event": "celery_worker_starting", "command": " ".join(celery_cmd)})
+        celery_process = subprocess.Popen(
+            celery_cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception as e:
+        logger.error({"event": "celery_worker_failed_to_start", "error": str(e)})
+
     yield
+    
+    # Shutdown Celery worker
+    if celery_process:
+        logger.info({"event": "celery_worker_terminating"})
+        celery_process.terminate()
+        try:
+            celery_process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            celery_process.kill()
+            
     close_db()
     logger.info({"event": "shutdown"})
 

@@ -41,6 +41,13 @@ def test_build_public_id_contains_job_id():
     assert public_id.endswith(FAKE_JOB_ID)
 
 
+def test_build_public_id_with_platform():
+    """_build_public_id() must append platform suffix if provided."""
+    public_id = _build_public_id(FAKE_JOB_ID, platform="instagram")
+    pattern = r"^viralgenai/\d{4}/\d{2}/\d{2}/" + re.escape(FAKE_JOB_ID) + "_instagram$"
+    assert re.match(pattern, public_id)
+
+
 # ── Successful upload ──────────────────────────────────────
 @pytest.mark.asyncio
 async def test_upload_image_returns_url():

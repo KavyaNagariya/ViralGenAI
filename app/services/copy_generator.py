@@ -67,7 +67,10 @@ def _enforce_char_limit(text: str, platform: str) -> str:
     return truncated[:last_space].rstrip() + "…" if last_space > 0 else truncated
 
 
-async def generate_copy(request: GenerateRequest) -> tuple[list[CopyVariant], Telemetry]:
+async def generate_copy(
+    request: GenerateRequest,
+    previous_turns: list[dict] = [],
+) -> tuple[list[CopyVariant], Telemetry]:
     """
     Core copy generation pipeline.
 
@@ -86,13 +89,41 @@ async def generate_copy(request: GenerateRequest) -> tuple[list[CopyVariant], Te
         for persona in request.personas:
             for idx in range(1, request.variants_count + 1):
                 system_prompt = get_persona_system_prompt(persona.value)
-                user_prompt = get_platform_user_instructions(platform.value, request.brief)
+
+                # Look for matching previous copy variant in the history
+                previous_copy_text = None
+                if previous_turns:
+                    for turn in reversed(previous_turns):
+                        for var in turn.get("variants", []):
+                            if (
+                                var.get("platform") == platform.value
+                                and var.get("persona") == persona.value
+                                and var.get("variant_index") == idx
+                            ):
+                                previous_copy_text = var.get("copy_text")
+                                break
+                        if previous_copy_text:
+                            break
+
+                if previous_copy_text:
+                    user_prompt = f"""
+We previously generated this copy:
+"{previous_copy_text}"
+
+The user wants to make modifications or has provided this feedback:
+"{request.brief}"
+
+Rewrite the copy based on the user's feedback. Maintain the target platform specifications and persona tone.
+""".strip()
+                else:
+                    user_prompt = get_platform_user_instructions(platform.value, request.brief)
 
                 logger.info({
                     "event": "generating_variant",
                     "platform": platform.value,
                     "persona": persona.value,
                     "variant_index": idx,
+                    "is_refinement": previous_copy_text is not None,
                 })
 
                 try:

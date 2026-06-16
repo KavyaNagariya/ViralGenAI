@@ -2,7 +2,88 @@ import React, { useState, useEffect, useRef } from 'react';
 
 const API_BASE = 'http://localhost:8000/api/v1';
 
+function TurnVariants({ turn }) {
+  const [activeIdx, setActiveIdx] = useState(0);
+  const [copySuccess, setCopySuccess] = useState('');
+
+  const handleCopy = (text) => {
+    navigator.clipboard.writeText(text);
+    setCopySuccess('copied');
+    setTimeout(() => setCopySuccess(''), 2000);
+  };
+
+  const selectedVariant = turn.variants?.[activeIdx];
+
+  return (
+    <div className="copy-variants">
+      {/* Tabs for each variant */}
+      <div style={{ display: 'flex', overflowX: 'auto', borderBottom: '1px solid var(--color-hairline)', gap: '4px' }}>
+        {turn.variants?.map((v, i) => (
+          <button
+            key={i}
+            className="btn"
+            style={{
+              backgroundColor: activeIdx === i ? 'var(--color-surface-card)' : 'transparent',
+              border: 'none',
+              borderRadius: 0,
+              fontSize: '11px',
+              padding: '4px 10px',
+              height: '28px',
+              color: activeIdx === i ? 'var(--color-ink)' : 'var(--color-mute)',
+              fontWeight: activeIdx === i ? '700' : '400',
+              whiteSpace: 'nowrap',
+            }}
+            onClick={() => setActiveIdx(i)}
+          >
+            {v.platform.toUpperCase()} ({v.persona})
+          </button>
+        ))}
+      </div>
+
+      {/* Selected Variant Display Card */}
+      {selectedVariant && (
+        <div className="variant-card">
+          <div className="variant-header">
+            <span>
+              {selectedVariant.platform.toUpperCase()} ·{' '}
+              {selectedVariant.persona.toUpperCase()}
+            </span>
+            <span>
+              {selectedVariant.char_count} chars
+            </span>
+          </div>
+          <div className="variant-body">
+            {selectedVariant.copy_text}
+          </div>
+          <div style={{ marginTop: '16px', display: 'flex', justifyContent: 'flex-end' }}>
+            <button
+              className="btn btn-secondary"
+              style={{ height: '28px', fontSize: '12px', padding: '0 12px' }}
+              onClick={() => handleCopy(selectedVariant.copy_text)}
+            >
+              {copySuccess === 'copied' ? '[x] Copied!' : '[+] Copy Text'}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
+  const [theme, setTheme] = useState(() => {
+    return localStorage.getItem('theme') || 'light';
+  });
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('theme', theme);
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme(prev => (prev === 'light' ? 'dark' : 'light'));
+  };
+
   // Navigation & Tab States
   const [activeTab, setActiveTab] = useState('generate'); // 'generate' | 'history'
   
@@ -19,9 +100,60 @@ export default function App() {
   const [activeJobStatus, setActiveJobStatus] = useState(null);
   const [activeJobLogs, setActiveJobLogs] = useState([]);
   const [copySuccess, setCopySuccess] = useState('');
+  const [runningPrompt, setRunningPrompt] = useState('');
+  const chatEndRef = useRef(null);
 
   // Active copy variant view index
   const [activeVariantIndex, setActiveVariantIndex] = useState(0);
+
+  // Toggle state for the slide-out history drawer
+  const [showHistoryDrawer, setShowHistoryDrawer] = useState(false);
+
+  // Delete a campaign from the database
+  const handleDeleteCampaign = async (e, jobId) => {
+    e.stopPropagation();
+    if (!confirm('Are you sure you want to delete this campaign? This action cannot be undone.')) {
+      return;
+    }
+    try {
+      const res = await fetch(`${API_BASE}/status/${jobId}`, {
+        method: 'DELETE',
+      });
+      if (res.ok) {
+        setHistory(prev => prev.filter(job => job.job_id !== jobId));
+        if (selectedJob?.job_id === jobId) {
+          setSelectedJob(null);
+        }
+        alert('Campaign deleted successfully.');
+      } else {
+        alert('Failed to delete campaign.');
+      }
+    } catch (err) {
+      console.error('Error deleting campaign:', err);
+      alert('Error connecting to backend.');
+    }
+  };
+
+  // Flush Upstash Redis database cache
+  const handleClearRedisCache = async () => {
+    if (!confirm('Are you sure you want to clear the Redis cache? This will flush all Celery broker queues and cached assets.')) {
+      return;
+    }
+    try {
+      const res = await fetch(`${API_BASE}/redis/clear`, {
+        method: 'POST',
+      });
+      if (res.ok) {
+        alert('Redis cache cleared successfully!');
+      } else {
+        const text = await res.text();
+        alert(`Failed to clear cache: ${text}`);
+      }
+    } catch (err) {
+      console.error('Error flushing Redis:', err);
+      alert('Error connecting to backend.');
+    }
+  };
 
   // References for polling and auto-scroll
   const pollingRef = useRef(null);
@@ -45,12 +177,25 @@ export default function App() {
     return () => stopPolling();
   }, []);
 
-  // Scroll logs to bottom automatically
+  // Scroll chat/logs to bottom automatically
   useEffect(() => {
-    if (logsEndRef.current) {
-      logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    if (chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [activeJobLogs]);
+  }, [selectedJob?.turns, activeJobLogs, activeJobStatus]);
+
+  // Synchronize configuration parameters when a campaign is selected
+  useEffect(() => {
+    if (selectedJob) {
+      const platforms = selectedJob.input?.platforms || [];
+      const personas = selectedJob.input?.personas || [];
+      const variants_count = selectedJob.input?.variants_count || 1;
+      
+      setSelectedPlatforms(platforms);
+      setSelectedPersonas(personas);
+      setVariantsCount(variants_count);
+    }
+  }, [selectedJob]);
 
   // Start polling status for a running task
   const startPolling = (jobId) => {
@@ -91,9 +236,9 @@ export default function App() {
     }
   };
 
-  // Submit ad generation request to FastAPI
+  // Submit ad generation request to FastAPI (handles new campaign or refinement)
   const handleGenerate = async (e) => {
-    e.preventDefault();
+    if (e) e.preventDefault();
     if (!brief || brief.trim().length < 3) {
       alert('Brief must be at least 3 characters long.');
       return;
@@ -115,6 +260,13 @@ export default function App() {
         variants_count: parseInt(variantsCount, 10),
       };
 
+      if (selectedJob) {
+        payload.job_id = selectedJob.job_id;
+      }
+
+      setRunningPrompt(brief);
+      setBrief('');
+
       const res = await fetch(`${API_BASE}/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -126,7 +278,9 @@ export default function App() {
       }
 
       const data = await res.json();
-      setSelectedJob(null); // Clear selected pane
+      if (!selectedJob) {
+        setSelectedJob(null); // Clear selected pane if brand new campaign
+      }
       setActiveVariantIndex(0);
       startPolling(data.job_id);
     } catch (err) {
@@ -170,401 +324,444 @@ export default function App() {
         setActiveJobStatus(null);
         setActiveJobLogs([]);
         setActiveVariantIndex(0);
+        setRunningPrompt('');
       }
     } catch (err) {
       console.error('Failed to retrieve historical job:', err);
     }
   };
-
   return (
     <div id="root">
+      {/* Drawer Backdrop */}
+      {showHistoryDrawer && (
+        <div className="drawer-backdrop" onClick={() => setShowHistoryDrawer(false)} />
+      )}
+
+      {/* History Slide-Out Drawer */}
+      <div className={`history-drawer ${showHistoryDrawer ? 'open' : ''}`}>
+        <div className="drawer-header">
+          <span>CAMPAIGN HISTORY</span>
+          <button className="btn" onClick={() => setShowHistoryDrawer(false)} style={{ border: 'none', background: 'transparent', fontSize: '16px', cursor: 'pointer', padding: 0 }}>
+            [x]
+          </button>
+        </div>
+        <div className="drawer-body">
+          <button
+            className="btn btn-primary"
+            style={{ width: '100%', marginBottom: '16px', height: '32px', fontSize: '12px' }}
+            onClick={() => {
+              setSelectedJob(null);
+              setActiveJobId(null);
+              setActiveJobStatus(null);
+              setActiveJobLogs([]);
+              setBrief('');
+              setShowHistoryDrawer(false);
+            }}
+          >
+            [+] NEW CAMPAIGN
+          </button>
+          
+          {history.length === 0 ? (
+            <div style={{ padding: '16px', textAlign: 'center', color: 'var(--color-mute)', fontSize: '12px' }}>
+              No past campaigns found.
+            </div>
+          ) : (
+            history.map((job) => (
+              <div
+                key={job.job_id}
+                className={`drawer-history-item ${selectedJob?.job_id === job.job_id ? 'selected' : ''}`}
+                onClick={() => {
+                  handleSelectHistory(job.job_id);
+                  setShowHistoryDrawer(false);
+                }}
+              >
+                <div className="drawer-item-info">
+                  <div className="drawer-item-title">
+                    {job.brief || job.input?.brief || 'No Brief Provided'}
+                  </div>
+                  <div className="drawer-item-meta">
+                    <span>ID: {job.job_id.substring(0, 8)}</span>
+                    <span className={`badge badge-${job.status ? job.status.toLowerCase() : 'pending'}`} style={{ fontSize: '8px', padding: '1px 4px' }}>
+                      {job.status || 'PENDING'}
+                    </span>
+                  </div>
+                </div>
+                <button
+                  className="btn-delete-history"
+                  onClick={(e) => handleDeleteCampaign(e, job.job_id)}
+                  title="Delete Campaign"
+                >
+                  ✖
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+
       {/* Primary Navigation Header */}
       <header>
-        <div className="brand-ascii">
+        <div className="brand-ascii" onClick={() => {
+          setSelectedJob(null);
+          setActiveJobId(null);
+          setActiveJobStatus(null);
+          setActiveJobLogs([]);
+          setBrief('');
+        }} style={{ cursor: 'pointer' }}>
           {`__   _____ ___    _   _    ___ ___ _  _     _   ___ \n\\ \\ / /_ _| _ \\  /_\\ | |  / __| __| \\| |   /_\\ |_ _|\n \\ V / | ||   / / _ \\| |_| (_ | _|| .\` |  / _ \\ | | \n  \\_/ |___|_|_\\/_/ \\_\\____\\___|___|_|\\_| /_/ \\_\\___|`}
+        </div>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <button
+            className="btn btn-secondary"
+            onClick={() => {
+              setSelectedJob(null);
+              setActiveJobId(null);
+              setActiveJobStatus(null);
+              setActiveJobLogs([]);
+              setBrief('');
+            }}
+            style={{ height: '32px', fontSize: '12px', padding: '0 12px' }}
+          >
+            [+] NEW CAMPAIGN
+          </button>
+          <button
+            className="btn btn-secondary"
+            onClick={() => setShowHistoryDrawer(true)}
+            style={{ height: '32px', fontSize: '12px', padding: '0 12px' }}
+          >
+            [=] HISTORY ({history.length})
+          </button>
+          <button
+            className="btn btn-secondary"
+            onClick={handleClearRedisCache}
+            style={{ height: '32px', fontSize: '12px', padding: '0 12px', borderColor: 'var(--color-danger)', color: 'var(--color-danger)' }}
+          >
+            [!] CLEAR CACHE
+          </button>
+          <button
+            className="btn btn-secondary"
+            onClick={toggleTheme}
+            style={{ height: '32px', fontSize: '12px', padding: '0 12px' }}
+          >
+            {theme === 'light' ? '[-] DARK_MODE' : '[+] LIGHT_MODE'}
+          </button>
         </div>
       </header>
 
-      {/* Main Split Pane Layout */}
+      {/* Main Layout (Full-Width) */}
       <div className="main-layout">
-        
-        {/* Left Side: Forms / Active progress / History */}
-        <div className="input-panel">
-          {/* Tab Switcher */}
-          <div style={{ display: 'flex', borderBottom: '1px solid var(--color-hairline-strong)', marginBottom: '16px' }}>
-            <button
-              className="btn"
-              style={{
-                flex: 1,
-                backgroundColor: 'transparent',
-                color: activeTab === 'generate' ? 'var(--color-ink)' : 'var(--color-mute)',
-                borderBottom: activeTab === 'generate' ? '2px solid var(--color-ink)' : 'none',
-                borderRadius: 0,
-                fontWeight: activeTab === 'generate' ? '700' : '400',
-              }}
-              onClick={() => setActiveTab('generate')}
-            >
-              [+] GENERATOR
-            </button>
-            <button
-              className="btn"
-              style={{
-                flex: 1,
-                backgroundColor: 'transparent',
-                color: activeTab === 'history' ? 'var(--color-ink)' : 'var(--color-mute)',
-                borderBottom: activeTab === 'history' ? '2px solid var(--color-ink)' : 'none',
-                borderRadius: 0,
-                fontWeight: activeTab === 'history' ? '700' : '400',
-              }}
-              onClick={() => setActiveTab('history')}
-            >
-              [-] HISTORY ({history.length})
-            </button>
-          </div>
-
-          {activeTab === 'generate' ? (
-            <>
-              {/* Form Input Card */}
-              <div className="tui-card">
-                <div className="tui-card-header">
-                  <span>INPUT_BRIEF_FORM</span>
-                  <span style={{ color: 'var(--color-mute)' }}>V1.0</span>
-                </div>
-                <div className="tui-card-body">
-                  <form onSubmit={handleGenerate}>
-                    <div className="form-group">
-                      <label className="form-label">AD BRIEF / CONCEPT</label>
-                      <textarea
-                        className="form-control"
-                        placeholder="e.g. A sleek modern smart watch for fitness enthusiasts..."
-                        value={brief}
-                        onChange={(e) => setBrief(e.target.value)}
-                        required
-                        disabled={activeJobStatus === 'PENDING' || activeJobStatus === 'PROCESSING'}
-                      />
-                    </div>
-
-                    <div className="form-group">
-                      <label className="form-label">TARGET PLATFORMS</label>
-                      <div className="checkbox-group">
-                        {['instagram', 'linkedin', 'facebook', 'twitter'].map((platform) => (
-                          <label key={platform} className="checkbox-label">
-                            <input
-                              type="checkbox"
-                              checked={selectedPlatforms.includes(platform)}
-                              onChange={() => handlePlatformToggle(platform)}
-                              disabled={activeJobStatus === 'PENDING' || activeJobStatus === 'PROCESSING'}
-                            />
-                            <div className="checkbox-box"></div>
-                            <span style={{ textTransform: 'capitalize' }}>{platform}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="form-group">
-                      <label className="form-label">BRAND PERSONAS</label>
-                      <div className="checkbox-group">
-                        {['professional', 'witty', 'urgent'].map((persona) => (
-                          <label key={persona} className="checkbox-label">
-                            <input
-                              type="checkbox"
-                              checked={selectedPersonas.includes(persona)}
-                              onChange={() => handlePersonaToggle(persona)}
-                              disabled={activeJobStatus === 'PENDING' || activeJobStatus === 'PROCESSING'}
-                            />
-                            <div className="checkbox-box"></div>
-                            <span style={{ textTransform: 'capitalize' }}>{persona}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="form-group">
-                      <label className="form-label">VARIANTS PER PERSONA</label>
-                      <input
-                        type="number"
-                        className="form-control"
-                        min="1"
-                        max="5"
-                        value={variantsCount}
-                        onChange={(e) => setVariantsCount(e.target.value)}
-                        required
-                        disabled={activeJobStatus === 'PENDING' || activeJobStatus === 'PROCESSING'}
-                      />
-                    </div>
-
-                    <button
-                      type="submit"
-                      className="btn btn-primary"
-                      style={{ width: '100%', marginTop: '8px' }}
-                      disabled={activeJobStatus === 'PENDING' || activeJobStatus === 'PROCESSING'}
-                    >
-                      {activeJobStatus === 'PENDING' || activeJobStatus === 'PROCESSING'
-                        ? 'QUEUED IN CELERY...'
-                        : 'GENERATE CAMPAIGN →'}
-                    </button>
-                  </form>
-                </div>
-              </div>
-
-              {/* Active Logs Console Card */}
-              {activeJobStatus && (
-                <div className="tui-card">
-                  <div className="tui-card-header">
-                    <span>CELERY_QUEUE_LOGS</span>
-                    <span className={`badge badge-${activeJobStatus.toLowerCase()}`}>
-                      {activeJobStatus}
-                    </span>
-                  </div>
-                  <div className="tui-card-body" style={{ padding: '12px' }}>
-                    <div className="log-box">
-                      {activeJobLogs.map((log, i) => (
-                        <div key={i} className="log-entry">
-                          <span className="log-time">
-                            [{new Date(log.timestamp).toLocaleTimeString()}]
-                          </span>
-                          <span
-                            className={`log-text ${
-                              log.status === 'FAILED'
-                                ? 'failed'
-                                : log.status === 'SUCCESS'
-                                ? 'success'
-                                : ''
-                            }`}
-                          >
-                            {log.message}
-                          </span>
-                        </div>
-                      ))}
-                      <div ref={logsEndRef} />
-                    </div>
-                  </div>
-                </div>
-              )}
-            </>
-          ) : (
-            /* History Gallery Panel */
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {history.length === 0 ? (
-                <div style={{ padding: '24px', textAlign: 'center', color: 'var(--color-mute)' }}>
-                  No historical campaigns found in database.
-                </div>
-              ) : (
-                history.map((job) => (
-                  <div
-                    key={job.job_id}
-                    className={`history-item ${selectedJob?.job_id === job.job_id ? 'selected' : ''}`}
-                    onClick={() => handleSelectHistory(job.job_id)}
-                  >
-                    <div className="history-header">
-                      <span>{job.job_id.substring(0, 8)}...</span>
-                      <span className={`badge badge-${job.status.toLowerCase()}`}>
-                        {job.status}
-                      </span>
-                    </div>
-                    <div className="history-brief">{job.refined_prompt || job.error || 'No prompt refined'}</div>
-                  </div>
-                ))
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* Right Side: Output visual previews and copy copies */}
         <div className="output-panel">
-          {!selectedJob ? (
-            /* Empty TUI Mockup landing card */
-            <div className="tui-dark-mockup" style={{ margin: 'auto', maxWidth: '640px', width: '100%' }}>
-              <div className="ascii-art">
-                {`██╗   ██╗██╗██████╗  █████╗ ██╗      ██████╗ ███████╗███╗   ██╗
-██║   ██║██║██╔══██╗██╔══██╗██║     ██╔════╝ ██╔════╝████╗  ██║
-██║   ██║██║██████╔╝███████║██║     ██║  ███╗█████╗  ██╔██╗ ██║
-╚██╗ ██╔╝██║██╔══██╗██╔══██║██║     ██║   ██║██╔══╝  ██║╚██╗██║
- ╚████╔╝ ██║██║  ██║██║  ██║███████╗╚██████╔╝███████╗██║ ╚████║
-  ╚═══╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝`}
-              </div>
-              <div className="tui-prompt-row">
-                <span style={{ color: 'var(--color-success)' }}>$</span> viralgenai --init-system
-              </div>
-              <div style={{ textAlign: 'left', marginTop: '16px', color: 'var(--color-mute)' }}>
-                <div className="list-row"><span className="list-bullet">[+]</span> <span>API endpoint: http://localhost:8000</span></div>
-                <div className="list-row"><span className="list-bullet">[+]</span> <span>MongoDB Atlas cluster online</span></div>
-                <div className="list-row"><span className="list-bullet">[+]</span> <span>Celery worker active & listening</span></div>
-                <div className="list-row"><span className="list-bullet">[+]</span> <span>Cloudinary storage active</span></div>
-              </div>
-              <div style={{ marginTop: '24px', fontSize: '11px', color: 'var(--color-ash)' }}>
-                Enter a brief on the left panel and click Generate to start the campaign asset pipeline.
-              </div>
-            </div>
-          ) : (
-            /* Detailed Campaign output preview view */
-            <>
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                  <h1>CAMPAIGN ASSETS</h1>
-                  <span className={`badge badge-${selectedJob.status.toLowerCase()}`}>
-                    {selectedJob.status}
-                  </span>
-                </div>
-                <div style={{ fontSize: '12px', color: 'var(--color-mute)' }}>
-                  Job ID: {selectedJob.job_id}
-                </div>
-              </div>
+          {/* 1. Scrollable Chat Message Area */}
+          <div className="chat-scroll-area">
+            {!selectedJob && !activeJobId ? (
+              /* ChatGPT / Gemini style landing interface */
+              <div className="chat-landing-container">
+                <h1 className="chat-landing-title">What campaign are we creating today?</h1>
+                <p className="chat-landing-subtitle">
+                  Enter your product brief or marketing concept, and we'll generate visual assets and social copy tailored for each platform.
+                </p>
 
-              {selectedJob.status === 'FAILED' ? (
-                <div
-                  style={{
-                    border: '1px solid var(--color-danger)',
-                    backgroundColor: 'rgba(255, 59, 48, 0.05)',
-                    padding: '16px',
-                    color: 'var(--color-danger)',
-                    fontSize: '13px',
-                  }}
-                >
-                  <strong>Pipeline Execution Failed:</strong>
-                  <p style={{ marginTop: '8px', whiteSpace: 'pre-wrap' }}>{selectedJob.error}</p>
-                </div>
-              ) : (
-                <>
-                  {/* Prompt Card */}
-                  {selectedJob.refined_prompt && (
-                    <div className="tui-card">
-                      <div className="tui-card-header">
-                        <span>REFINED_VISUAL_PROMPT</span>
-                      </div>
-                      <div className="tui-card-body" style={{ fontSize: '13px', fontStyle: 'italic', lineHeight: '1.6' }}>
-                        "{selectedJob.refined_prompt}"
-                      </div>
-                    </div>
-                  )}
+                {/* Suggestion Cards Grid */}
+                <div className="suggestion-grid">
+                  <div
+                    className="suggestion-card"
+                    onClick={() =>
+                      setBrief('A sleek modern smartwatch for fitness runners, featuring real-time heart rate tracking and GPS route mapping.')
+                    }
+                  >
+                    <span className="suggestion-icon">⌚</span>
+                    <div className="suggestion-card-title">Fitness Smartwatch</div>
+                    <div className="suggestion-card-desc">Sleek smart watch with heart rate tracking & GPS.</div>
+                  </div>
 
-                  {/* Split Preview: Image and copy */}
-                  <div className="preview-layout">
-                    {/* Left: Image Box */}
-                    <div>
-                      <h2 style={{ fontSize: '14px', color: 'var(--color-mute)', textTransform: 'uppercase' }}>
-                        Generated Visual
-                      </h2>
-                      <div className="image-container">
-                        {selectedJob.image_url ? (
-                          <a href={selectedJob.image_url} target="_blank" rel="noopener noreferrer">
-                            <img src={selectedJob.image_url} alt="Generated Campaign Visual" />
-                          </a>
-                        ) : (
-                          <div className="image-placeholder">
-                            [-] Image url missing or generation skipped.
-                          </div>
-                        )}
-                      </div>
-                      {selectedJob.image_url && (
-                        <div style={{ marginTop: '8px', textAlign: 'right' }}>
-                          <a href={selectedJob.image_url} target="_blank" rel="noopener noreferrer" style={{ fontSize: '12px' }}>
-                            [+] View Full Size Image
-                          </a>
-                        </div>
-                      )}
+                  <div
+                    className="suggestion-card"
+                    onClick={() =>
+                      setBrief('Launch of organic, small-batch dark roast coffee beans sourced from sustainable family-owned farms, with rich chocolate undertones.')
+                    }
+                  >
+                    <span className="suggestion-icon">☕</span>
+                    <div className="suggestion-card-title">Organic Coffee Launch</div>
+                    <div className="suggestion-card-desc">Rich dark roast beans from sustainable family farms.</div>
+                  </div>
+
+                  <div
+                    className="suggestion-card"
+                    onClick={() =>
+                      setBrief('An AI-powered smart home security system with real-time facial recognition, night vision, and immediate mobile app alerts.')
+                    }
+                  >
+                    <span className="suggestion-icon">🏠</span>
+                    <div className="suggestion-card-title">Smart Home Security</div>
+                    <div className="suggestion-card-desc">AI-powered cameras with real-time facial recognition.</div>
+                  </div>
+
+                  <div
+                    className="suggestion-card"
+                    onClick={() =>
+                      setBrief('Premium handcrafted full-grain leather backpack designed for modern digital nomads, featuring a padded laptop compartment and water resistance.')
+                    }
+                  >
+                    <span className="suggestion-icon">🎒</span>
+                    <div className="suggestion-card-title">Leather Nomad Backpack</div>
+                    <div className="suggestion-card-desc">Handcrafted leather bag with modern tech storage.</div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              /* Chat Thread Container containing all turns, active logs, or errors */
+              <div className="chat-thread-container">
+                {/* Render all turns for the campaign */}
+                {selectedJob?.turns?.map((turn, i) => (
+                  <React.Fragment key={i}>
+                    {/* User Message Bubble */}
+                    <div className="chat-bubble-user">
+                      <strong>Brief submitted:</strong>
+                      <p style={{ marginTop: '8px', margin: 0, fontStyle: 'italic' }}>
+                        "{turn.brief}"
+                      </p>
                     </div>
 
-                    {/* Right: Text Copy Variants */}
-                    <div>
-                      <h2 style={{ fontSize: '14px', color: 'var(--color-mute)', textTransform: 'uppercase' }}>
-                        Ad Copy Variants ({selectedJob.variants?.length || 0})
-                      </h2>
-                      {(!selectedJob.variants || selectedJob.variants.length === 0) ? (
-                        <div style={{ border: '1px solid var(--color-hairline)', padding: '24px', color: 'var(--color-mute)', fontSize: '13px' }}>
-                          [-] No copy text variants returned.
-                        </div>
-                      ) : (
-                        <div className="copy-variants">
-                          {/* Tabs for each variant */}
-                          <div style={{ display: 'flex', overflowX: 'auto', borderBottom: '1px solid var(--color-hairline)', gap: '4px' }}>
-                            {selectedJob.variants.map((v, i) => (
-                              <button
-                                key={i}
-                                className="btn"
-                                style={{
-                                  backgroundColor: activeVariantIndex === i ? 'var(--color-surface-card)' : 'transparent',
-                                  border: 'none',
-                                  borderRadius: 0,
-                                  fontSize: '11px',
-                                  padding: '4px 10px',
-                                  height: '28px',
-                                  color: activeVariantIndex === i ? 'var(--color-ink)' : 'var(--color-mute)',
-                                  fontWeight: activeVariantIndex === i ? '700' : '400',
-                                  whiteSpace: 'nowrap',
-                                }}
-                                onClick={() => setActiveVariantIndex(i)}
-                              >
-                                {v.platform.toUpperCase()} ({v.persona})
-                              </button>
-                            ))}
-                          </div>
+                    {/* AI Response Bubble */}
+                    <div className="chat-bubble-ai">
+                      <div className="chat-bubble-ai-header">
+                        <span>ViralGen AI Response - Version {i + 1}</span>
+                      </div>
 
-                          {/* Selected Variant Display Card */}
-                          {selectedJob.variants[activeVariantIndex] && (
-                            <div className="variant-card">
-                              <div className="variant-header">
-                                <span>
-                                  {selectedJob.variants[activeVariantIndex].platform.toUpperCase()} ·{' '}
-                                  {selectedJob.variants[activeVariantIndex].persona.toUpperCase()}
-                                </span>
-                                <span>
-                                  {selectedJob.variants[activeVariantIndex].char_count} chars
-                                </span>
+                      {/* Split Preview: Image and copy */}
+                      <div className="preview-layout" style={{ width: '100%' }}>
+                        {/* Left: Image Box */}
+                        <div>
+                          <h2 style={{ fontSize: '14px', color: 'var(--color-mute)', textTransform: 'uppercase' }}>
+                            Generated Visual
+                          </h2>
+                          <div className="image-container">
+                            {turn.image_url ? (
+                              <a href={turn.image_url} target="_blank" rel="noopener noreferrer">
+                                <img src={turn.image_url} alt="Generated Campaign Visual" />
+                              </a>
+                            ) : (
+                              <div className="image-placeholder">
+                                [-] Image url missing or generation skipped.
                               </div>
-                              <div className="variant-body">
-                                {selectedJob.variants[activeVariantIndex].copy_text}
-                              </div>
-                              <div style={{ marginTop: '16px', display: 'flex', justifyContent: 'flex-end' }}>
-                                <button
-                                  className="btn btn-secondary"
-                                  style={{ height: '28px', fontSize: '12px', padding: '0 12px' }}
-                                  onClick={() =>
-                                    handleCopyClipboard(
-                                      selectedJob.variants[activeVariantIndex].copy_text,
-                                      `v-${activeVariantIndex}`
-                                    )
-                                  }
-                                >
-                                  {copySuccess === `v-${activeVariantIndex}` ? '[x] Copied!' : '[+] Copy Text'}
-                                </button>
-                              </div>
+                            )}
+                          </div>
+                          {turn.image_url && (
+                            <div style={{ marginTop: '8px', textAlign: 'right' }}>
+                              <a href={turn.image_url} target="_blank" rel="noopener noreferrer" style={{ fontSize: '12px' }}>
+                                [+] View Full Size Image
+                              </a>
                             </div>
                           )}
                         </div>
+
+                        {/* Right: Text Copy Variants */}
+                        <div>
+                          <h2 style={{ fontSize: '14px', color: 'var(--color-mute)', textTransform: 'uppercase' }}>
+                            Ad Copy Variants ({turn.variants?.length || 0})
+                          </h2>
+                          {(!turn.variants || turn.variants.length === 0) ? (
+                            <div style={{ border: '1px solid var(--color-hairline)', padding: '24px', color: 'var(--color-mute)', fontSize: '13px', borderRadius: '6px' }}>
+                              [-] No copy text variants returned.
+                            </div>
+                          ) : (
+                            <TurnVariants turn={turn} />
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Telemetry data box */}
+                      {turn.telemetry && (
+                        <div
+                          style={{
+                            width: '100%',
+                            padding: '12px',
+                            border: '1px dashed var(--color-hairline)',
+                            borderRadius: '6px',
+                            fontSize: '12px',
+                            color: 'var(--color-mute)',
+                          }}
+                        >
+                          <strong>Telemetry Data:</strong>{' '}
+                          LLM: <code>{turn.telemetry.model}</code> ({turn.telemetry.llm_provider}) |{' '}
+                          Duration: <code>{(turn.telemetry.total_duration_ms / 1000).toFixed(2)}s</code> |{' '}
+                          Created: <code>{new Date(turn.telemetry.created_at).toLocaleString()}</code>
+                        </div>
                       )}
                     </div>
-                  </div>
+                  </React.Fragment>
+                ))}
 
-                  {/* Telemetry data box */}
-                  {selectedJob.telemetry && (
+                {/* If the current job is generating/processing, show the running turn */}
+                {activeJobId && (activeJobStatus === 'PENDING' || activeJobStatus === 'PROCESSING') && (
+                  <React.Fragment>
+                    {/* User bubble for current running prompt */}
+                    <div className="chat-bubble-user">
+                      <strong>Brief submitted:</strong>
+                      <p style={{ marginTop: '8px', margin: 0, fontStyle: 'italic' }}>
+                        "{runningPrompt}"
+                      </p>
+                    </div>
+
+                    {/* AI Bubble showing live queue logs */}
+                    <div className="chat-bubble-ai">
+                      <div className="chat-bubble-ai-header">
+                        <span>ViralGen AI Status (Running...)</span>
+                      </div>
+
+                      <div className="tui-card" style={{ width: '100%', borderRadius: '6px', overflow: 'hidden' }}>
+                        <div className="tui-card-header">
+                          <span>CELERY_QUEUE_LOGS</span>
+                          <span className={`badge badge-${activeJobStatus ? activeJobStatus.toLowerCase() : 'pending'}`}>
+                            {activeJobStatus}
+                          </span>
+                        </div>
+                        <div className="tui-card-body" style={{ padding: '12px' }}>
+                          <div className="log-box" style={{ height: '200px' }}>
+                            {activeJobLogs.map((log, i) => (
+                              <div key={i} className="log-entry">
+                                <span className="log-time">
+                                  [{new Date(log.timestamp).toLocaleTimeString()}]
+                                </span>
+                                <span
+                                  className={`log-text ${
+                                    log.status === 'FAILED'
+                                      ? 'failed'
+                                      : log.status === 'SUCCESS'
+                                      ? 'success'
+                                      : ''
+                                  }`}
+                                >
+                                  {log.message}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </React.Fragment>
+                )}
+
+                {/* If the campaign run failed, show execution failure box */}
+                {selectedJob && selectedJob.status === 'FAILED' && (
+                  <div className="chat-bubble-ai">
                     <div
                       style={{
-                        marginTop: '16px',
-                        padding: '12px',
-                        border: '1px dashed var(--color-hairline)',
-                        fontSize: '12px',
-                        color: 'var(--color-mute)',
+                        border: '1px solid var(--color-danger)',
+                        backgroundColor: 'rgba(255, 59, 48, 0.05)',
+                        padding: '16px',
+                        color: 'var(--color-danger)',
+                        fontSize: '13px',
+                        borderRadius: '6px',
+                        width: '100%',
                       }}
                     >
-                      <strong>Telemetry Data:</strong>{' '}
-                      LLM: <code>{selectedJob.telemetry.model}</code> ({selectedJob.telemetry.llm_provider}) |{' '}
-                      Duration: <code>{(selectedJob.telemetry.total_duration_ms / 1000).toFixed(2)}s</code> |{' '}
-                      Created: <code>{new Date(selectedJob.telemetry.created_at).toLocaleString()}</code>
+                      <strong>Pipeline Execution Failed:</strong>
+                      <p style={{ marginTop: '8px', whiteSpace: 'pre-wrap' }}>{selectedJob.error}</p>
                     </div>
-                  )}
-                </>
-              )}
-            </>
-          )}
+                  </div>
+                )}
+                
+                <div ref={chatEndRef} />
+              </div>
+            )}
+          </div>
+
+          {/* 2. Sticky Bottom Configuration & Input Box */}
+          <div className="chat-input-sticky-container">
+            {/* Campaign Inline Settings */}
+            <div className="inline-config-bar">
+              <div className="inline-config-row">
+                <span className="inline-config-label">Platforms:</span>
+                <div className="chips-container">
+                  {['instagram', 'linkedin', 'facebook', 'twitter'].map((platform) => (
+                    <span
+                      key={platform}
+                      className={`chip-pill ${selectedPlatforms.includes(platform) ? 'active' : ''}`}
+                      onClick={() => handlePlatformToggle(platform)}
+                    >
+                      {platform.toUpperCase()}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              <div className="inline-config-row">
+                <span className="inline-config-label">Personas:</span>
+                <div className="chips-container">
+                  {['professional', 'witty', 'urgent'].map((persona) => (
+                    <span
+                      key={persona}
+                      className={`chip-pill ${selectedPersonas.includes(persona) ? 'active' : ''}`}
+                      onClick={() => handlePersonaToggle(persona)}
+                    >
+                      {persona.toUpperCase()}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              <div className="inline-config-row">
+                <span className="inline-config-label">Variants:</span>
+                <div className="inline-counter">
+                  <button
+                    type="button"
+                    className="counter-btn"
+                    onClick={() => setVariantsCount(prev => Math.max(1, prev - 1))}
+                  >
+                    -
+                  </button>
+                  <span className="counter-value">{variantsCount}</span>
+                  <button
+                    type="button"
+                    className="counter-btn"
+                    onClick={() => setVariantsCount(prev => Math.min(5, prev + 1))}
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Chat Input Box */}
+            <form onSubmit={handleGenerate} className="chat-input-form">
+              <div className="chat-input-bar">
+                <textarea
+                  className="chat-input-textarea"
+                  placeholder={selectedJob ? "Point out mistakes or request changes in this campaign..." : "Message ViralGen AI..."}
+                  value={brief}
+                  onChange={(e) => setBrief(e.target.value)}
+                  rows={1}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      handleGenerate(e);
+                    }
+                  }}
+                />
+                <button
+                  type="submit"
+                  className="chat-send-btn"
+                  disabled={!brief || brief.trim().length < 3 || activeJobStatus === 'PENDING' || activeJobStatus === 'PROCESSING'}
+                  title="Generate Campaign"
+                >
+                  <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+                  </svg>
+                </button>
+              </div>
+              <div className="chat-input-disclaimer">
+                AI can make mistakes. Specify your platforms and personas using the config selectors above.
+              </div>
+            </form>
+          </div>
         </div>
       </div>
 
       {/* Footer copyright section */}
       <footer>
         <span>©2026 ViralGen AI Terminal</span>
-        <span>Made with IBM Plex Mono & JetBrains Mono</span>
       </footer>
     </div>
   );

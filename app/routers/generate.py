@@ -34,17 +34,6 @@ logger = get_logger(__name__)
 async def submit_generation_job(
     request: GenerateRequest,
 ) -> GenerateResponse:
-    job_id = str(uuid.uuid4())
-
-    logger.info({
-        "event": "job_submitted",
-        "job_id": job_id,
-        "brief": request.brief[:60],
-        "platforms": [p.value for p in request.platforms],
-        "personas": [p.value for p in request.personas],
-        "variants_count": request.variants_count,
-    })
-
     request_data = {
         "brief": request.brief,
         "platforms": [p.value for p in request.platforms],
@@ -52,11 +41,43 @@ async def submit_generation_job(
         "variants_count": request.variants_count,
     }
 
-    # Persist PENDING job immediately — must complete before returning 202
-    await job_store.create_job(
-        job_id=job_id,
-        request_data=request_data,
-    )
+    if request.job_id:
+        from fastapi import HTTPException
+        job_id = request.job_id
+        doc = await job_store.get_job(job_id)
+        if not doc:
+            raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+        
+        logger.info({
+            "event": "job_refinement_submitted",
+            "job_id": job_id,
+            "brief": request.brief[:60],
+            "platforms": request_data["platforms"],
+            "personas": request_data["personas"],
+        })
+        
+        # Transition back to pending
+        await job_store.update_job_status(
+            job_id=job_id,
+            status=JobStatus.pending,
+            message=f"Refining campaign with instruction: {request.brief}",
+        )
+    else:
+        job_id = str(uuid.uuid4())
+        logger.info({
+            "event": "job_submitted",
+            "job_id": job_id,
+            "brief": request.brief[:60],
+            "platforms": request_data["platforms"],
+            "personas": request_data["personas"],
+            "variants_count": request.variants_count,
+        })
+
+        # Persist PENDING job immediately — must complete before returning 202
+        await job_store.create_job(
+            job_id=job_id,
+            request_data=request_data,
+        )
 
     # Offload to Celery — delay serialization of GenerateRequest models as dicts
     run_generation_pipeline_task.delay(job_id, request_data)

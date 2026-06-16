@@ -149,3 +149,102 @@ async def test_health_check():
         response = await client.get("/health")
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
+
+
+# ── DELETE /api/v1/status/{job_id} ──────────────────────────
+@pytest.mark.asyncio
+async def test_delete_campaign_success():
+    """DELETE /status/{job_id} must return success message on deletion."""
+    with patch("app.routers.status.job_store.delete_job", new_callable=AsyncMock, return_value=True):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.delete(f"/api/v1/status/{FAKE_JOB_ID}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert "deleted successfully" in body["message"]
+
+
+@pytest.mark.asyncio
+async def test_delete_campaign_404():
+    """DELETE /status/{job_id} must return 404 if campaign is not found."""
+    with patch("app.routers.status.job_store.delete_job", new_callable=AsyncMock, return_value=False):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.delete("/api/v1/status/nonexistent-id")
+
+    assert response.status_code == 404
+
+
+# ── POST /api/v1/redis/clear ──────────────────────────────
+@pytest.mark.asyncio
+async def test_clear_redis_success():
+    """POST /redis/clear must call flushdb and return success message."""
+    mock_redis = MagicMock()
+    with (
+        patch("app.routers.status.settings", MagicMock(upstash_redis_url="http://redis", upstash_redis_token="token")),
+        patch("app.routers.status.Redis", return_value=mock_redis),
+    ):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/api/v1/redis/clear")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+    mock_redis.flushdb.assert_called_once()
+
+
+# ── POST /api/v1/generate (Refinement) ──────────────────────
+@pytest.mark.asyncio
+async def test_generate_refinement_success():
+    """POST /generate with job_id should verify job exists, update status, and return 202."""
+    fake_job_doc = {
+        "job_id": FAKE_JOB_ID,
+        "status": "SUCCESS",
+        "input": {"brief": "original brief"},
+    }
+    with (
+        patch("app.routers.generate.job_store.get_job", new_callable=AsyncMock, return_value=fake_job_doc),
+        patch("app.routers.generate.job_store.update_job_status", new_callable=AsyncMock) as mock_update_status,
+        patch("app.routers.generate.run_generation_pipeline_task.delay") as mock_delay,
+    ):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(
+                "/api/v1/generate",
+                json={
+                    "job_id": FAKE_JOB_ID,
+                    "brief": "make the image futuristic",
+                    "platforms": ["instagram"],
+                    "personas": ["professional"],
+                    "variants_count": 1,
+                },
+            )
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body["job_id"] == FAKE_JOB_ID
+    assert body["status"] == "PENDING"
+    mock_update_status.assert_called_once_with(
+        job_id=FAKE_JOB_ID,
+        status=JobStatus.pending,
+        message="Refining campaign with instruction: make the image futuristic",
+    )
+    mock_delay.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_generate_refinement_404_if_not_found():
+    """POST /generate with non-existent job_id should return 404."""
+    with patch("app.routers.generate.job_store.get_job", new_callable=AsyncMock, return_value=None):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(
+                "/api/v1/generate",
+                json={
+                    "job_id": "nonexistent-job-id",
+                    "brief": "make the image futuristic",
+                    "platforms": ["instagram"],
+                    "personas": ["professional"],
+                    "variants_count": 1,
+                },
+            )
+
+    assert response.status_code == 404
+

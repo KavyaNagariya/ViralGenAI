@@ -4,7 +4,7 @@ app/models/request_models.py
 Pydantic schemas for incoming API requests.
 """
 from enum import Enum
-from typing import List
+from typing import List, Optional
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -22,6 +22,10 @@ class Persona(str, Enum):
 
 
 class GenerateRequest(BaseModel):
+    job_id: Optional[str] = Field(
+        default=None,
+        description="The ID of the job to refine if doing a multi-turn conversational loop",
+    )
     brief: str = Field(
         ...,
         min_length=3,

@@ -32,14 +32,15 @@ def _configure_cloudinary() -> None:
     )
 
 
-def _build_public_id(job_id: str) -> str:
+def _build_public_id(job_id: str, platform: Optional[str] = None) -> str:
     """
     Build a date-partitioned public_id for Cloudinary.
-    Pattern: viralgenai/YYYY/MM/DD/{job_id}
+    Pattern: viralgenai/YYYY/MM/DD/{job_id}[_{platform}]
     """
     now = datetime.now(timezone.utc)
     folder = settings.cloudinary_folder  # default: "viralgenai"
-    return f"{folder}/{now.year}/{now.month:02d}/{now.day:02d}/{job_id}"
+    suffix = f"_{platform}" if platform else ""
+    return f"{folder}/{now.year}/{now.month:02d}/{now.day:02d}/{job_id}{suffix}"
 
 
 def _upload_to_cloudinary(image_bytes: bytes, public_id: str) -> str:
@@ -65,13 +66,18 @@ def _upload_to_cloudinary(image_bytes: bytes, public_id: str) -> str:
     return secure_url
 
 
-async def upload_image(job_id: str, image_bytes: bytes) -> str:
+async def upload_image(
+    job_id: str,
+    image_bytes: bytes,
+    platform: Optional[str] = None,
+) -> str:
     """
     Upload PNG image bytes to Cloudinary asynchronously.
 
     Args:
         job_id: UUID of the job — used as part of the public_id
         image_bytes: Validated PNG bytes from image_generator
+        platform: Optional platform name to append to the public_id
 
     Returns:
         Permanent public HTTPS URL to the uploaded image
@@ -79,7 +85,7 @@ async def upload_image(job_id: str, image_bytes: bytes) -> str:
     Raises:
         RuntimeError: If the upload fails or returns no URL
     """
-    public_id = _build_public_id(job_id)
+    public_id = _build_public_id(job_id, platform)
 
     logger.info({
         "event": "cloudinary_upload_start",

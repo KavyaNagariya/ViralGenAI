@@ -29,6 +29,7 @@ class CopyVariant(BaseModel):
     copy_text: str
     char_count: int
     variant_index: int = 1
+    image_url: Optional[str] = None
 
 
 class Telemetry(BaseModel):
@@ -36,6 +37,15 @@ class Telemetry(BaseModel):
     model: str
     image_model: Optional[str] = None      # populated in Week 2
     total_duration_ms: Optional[int] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class CampaignTurn(BaseModel):
+    brief: str
+    refined_prompt: Optional[str] = None
+    image_url: Optional[str] = None
+    variants: List[CopyVariant] = []
+    telemetry: Optional[Telemetry] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -51,10 +61,12 @@ class StatusResponse(BaseModel):
     job_id: str
     status: JobStatus
     progress_log: List[StatusLogEntry] = []
+    brief: Optional[str] = None
     refined_prompt: Optional[str] = None      # populated after Prompt Refinement Agent runs
     variants: Optional[List[CopyVariant]] = None
     image_url: Optional[str] = None           # populated after Cloudinary upload
     telemetry: Optional[Telemetry] = None
+    turns: List[CampaignTurn] = []
     error: Optional[str] = None
 
 
@@ -68,5 +80,6 @@ class JobDocument(BaseModel):
     image_url: Optional[str] = None
     telemetry: Optional[Telemetry] = None
     status_history: List[StatusLogEntry] = []
+    turns: List[CampaignTurn] = []
     created_at: datetime = Field(default_factory=datetime.utcnow)
     completed_at: Optional[datetime] = None

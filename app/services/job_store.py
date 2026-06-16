@@ -67,6 +67,7 @@ async def create_job(job_id: str, request_data: dict) -> None:
         "variants": [],
         "image_url": None,
         "telemetry": None,
+        "turns": [],
         "status_history": [
             {
                 "status": JobStatus.pending.value,
@@ -143,6 +144,48 @@ async def update_job_result(
     logger.info({"event": "job_result_saved", "job_id": job_id, "variants": len(variants)})
 
 
+async def add_job_turn(
+    job_id: str,
+    brief: str,
+    refined_prompt: Optional[str],
+    image_url: Optional[str],
+    variants: list[CopyVariant],
+    telemetry: Telemetry,
+) -> None:
+    """Append a CampaignTurn to the 'turns' list and update top-level properties."""
+    now = datetime.now(timezone.utc)
+    turn = {
+        "brief": brief,
+        "refined_prompt": refined_prompt,
+        "image_url": image_url,
+        "variants": [v.model_dump() for v in variants],
+        "telemetry": telemetry.model_dump(),
+        "created_at": now,
+    }
+    await _get_collection().update_one(
+        {"job_id": job_id},
+        {
+            "$set": {
+                "status": JobStatus.success.value,
+                "refined_prompt": refined_prompt,
+                "image_url": image_url,
+                "variants": [v.model_dump() for v in variants],
+                "telemetry": telemetry.model_dump(),
+                "completed_at": now,
+            },
+            "$push": {
+                "turns": turn,
+                "status_history": {
+                    "status": JobStatus.success.value,
+                    "message": f"Generated turn successfully with {len(variants)} copy variants.",
+                    "timestamp": now,
+                }
+            },
+        },
+    )
+    logger.info({"event": "job_turn_added", "job_id": job_id, "variants": len(variants)})
+
+
 async def mark_job_failed(job_id: str, error: str) -> None:
     """Mark a job as FAILED with an error message."""
     now = datetime.now(timezone.utc)
@@ -163,6 +206,15 @@ async def mark_job_failed(job_id: str, error: str) -> None:
         },
     )
     logger.error({"event": "job_marked_failed", "job_id": job_id, "error": error})
+
+
+async def delete_job(job_id: str) -> bool:
+    """Delete a job document by job_id. Returns True if deleted, False otherwise."""
+    result = await _get_collection().delete_one({"job_id": job_id})
+    deleted = result.deleted_count > 0
+    if deleted:
+        logger.info({"event": "job_deleted", "job_id": job_id})
+    return deleted
 
 
 async def get_job(job_id: str) -> Optional[dict]:

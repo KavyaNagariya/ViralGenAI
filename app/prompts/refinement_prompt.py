@@ -46,3 +46,23 @@ Target platform framing: {aspect_hint}
 
 Transform the brief above into a single detailed visual image prompt following your instructions.
 """.strip()
+
+
+def build_re_refinement_user_prompt(brief: str, platform: str, previous_refined: str) -> str:
+    """
+    Constructs the user-turn message for the Refinement Agent when modifying an existing prompt.
+    """
+    spec = PLATFORM_SPECS.get(platform)
+    aspect_hint = f"{spec.aspect_ratio} aspect ratio ({spec.image_resolution})" if spec else "square"
+
+    return f"""
+We previously generated this detailed visual prompt:
+"{previous_refined}"
+
+The user wants to make modifications or has provided this feedback:
+"{brief}"
+
+Target platform framing: {aspect_hint}
+
+Modify the previous prompt based on the user's feedback. Output ONE single dense paragraph only following the rules. Do not include any preamble, brand names, or marketing copy.
+""".strip()
